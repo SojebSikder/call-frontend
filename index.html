@@ -13,17 +13,152 @@
     <button onclick="join()">Join</button>
     <br><br>
     <input type="text" id="callTo" placeholder="Call username" />
-    <button onclick="call()">Call</button>
+    <button onclick="callUser()">Call</button>
     <br><br>
     <button onclick="endCall()">End Call</button>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
-    <script src="/call.js"></script>
-
     <script>
-        const receiver_id = document.getElementById("callTo").value;
-    </script>
+        const socket = io("http://localhost:4000", {
+            auth: {
+                token: localStorage.getItem("token")
+            }
+        });
+        let localStream, peerConnection;
+        const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+        let iceCandidatesQueue = [];
 
+        function join() {
+            const username = document.getElementById("username").value;
+            socket.emit("join", { username });
+        }
+
+        async function setupPeerConnection(remoteUsername) {
+            peerConnection = new RTCPeerConnection(config);
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit("iceCandidate", {
+                        receiver: remoteUsername,
+                        candidate: event.candidate
+                    });
+                }
+            };
+
+            peerConnection.ontrack = event => {
+                const audio = document.createElement("audio");
+                audio.srcObject = event.streams[0];
+                audio.autoplay = true;
+                document.body.appendChild(audio);
+            };
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                localStream.getTracks().forEach(track =>
+                    peerConnection.addTrack(track, localStream)
+                );
+            } catch (err) {
+                console.error("Error accessing media devices:", err);
+            }
+
+            return peerConnection;
+        }
+
+        async function callUser() {
+            try {
+                const callTo = document.getElementById("callTo").value;
+                await setupPeerConnection(callTo);
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                socket.emit("call", {
+                    caller: document.getElementById("username").value,
+                    receiver: callTo,
+                    offer
+                });
+            } catch (err) {
+                console.error("Error making call:", err);
+            }
+        }
+
+        socket.on("incomingCall", async ({ caller, offer }) => {
+            try {
+                await setupPeerConnection(caller);
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+                // Process any queued candidates
+                while (iceCandidatesQueue.length) {
+                    const candidate = iceCandidatesQueue.shift();
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                socket.emit("answer", {
+                    caller,
+                    receiver: document.getElementById("username").value,
+                    answer
+                });
+            } catch (err) {
+                console.error("Error handling incoming call:", err);
+            }
+        });
+
+        socket.on("callAccepted", async ({ answer }) => {
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+
+                // Process any queued candidates
+                while (iceCandidatesQueue.length) {
+                    const candidate = iceCandidatesQueue.shift();
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            } catch (err) {
+                console.error("Error handling accepted call:", err);
+            }
+        });
+
+        socket.on("iceCandidate", async ({ candidate }) => {
+            try {
+                if (peerConnection && peerConnection.remoteDescription) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                } else {
+                    iceCandidatesQueue.push(candidate);
+                }
+            } catch (err) {
+                console.error("Error adding ICE candidate:", err);
+            }
+        });
+
+        socket.on("callEnded", () => {
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            const audioElements = document.getElementsByTagName("audio");
+            while (audioElements.length > 0) {
+                audioElements[0].remove();
+            }
+        });
+
+        function endCall() {
+            socket.emit("endCall", { receiver: document.getElementById("callTo").value });
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            const audioElements = document.getElementsByTagName("audio");
+            while (audioElements.length > 0) {
+                audioElements[0].remove();
+            }
+        }
+    </script>
 </body>
 
 </html>
