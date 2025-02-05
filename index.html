@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Audio Call</title>
+</head>
+
+<body>
+    <h2>WebRTC Audio Call</h2>
+    <input type="text" id="username" placeholder="Enter your username" />
+    <button onclick="join()">Join</button>
+    <br><br>
+    <input type="text" id="callTo" placeholder="Call username" />
+    <button onclick="call()">Call</button>
+    <br><br>
+    <button onclick="endCall()">End Call</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
+    <script src="/call.js"></script>
+
+    <script>
+        const receiver_id = document.getElementById("callTo").value;
+    </script>
+
+</body>
+
+</html>
