@@ -4,11 +4,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebRTC Audio Call</title>
+    <title>WebRTC Video Call</title>
+    <style>
+        video {
+            width: 300px;
+            height: 225px;
+            margin: 10px;
+            background: #000;
+        }
+    </style>
 </head>
 
 <body>
-    <h2>WebRTC Audio Call</h2>
+    <h2>WebRTC Video Call</h2>
     <input type="text" id="username" placeholder="Enter your username" />
     <button onclick="join()">Join</button>
     <br><br>
@@ -16,14 +24,20 @@
     <button onclick="callUser()">Call</button>
     <br><br>
     <button onclick="endCall()">End Call</button>
+    <br><br>
+    <div id="videoContainer">
+        <video id="localVideo" autoplay muted playsinline></video>
+        <video id="remoteVideo" autoplay playsinline></video>
+    </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
     <script>
         const socket = io("http://localhost:4000", {
             auth: {
-                token: localStorage.getItem("token")
+                token: "jwt_token"
             }
         });
+
         let localStream, peerConnection;
         const config = {
             iceServers: [
@@ -54,17 +68,18 @@
             };
 
             peerConnection.ontrack = event => {
-                const audio = document.createElement("audio");
-                audio.srcObject = event.streams[0];
-                audio.autoplay = true;
-                document.body.appendChild(audio);
+                const remoteVideo = document.getElementById("remoteVideo");
+                remoteVideo.srcObject = event.streams[0];
             };
 
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
                 localStream.getTracks().forEach(track =>
                     peerConnection.addTrack(track, localStream)
                 );
+
+                const localVideo = document.getElementById("localVideo");
+                localVideo.srcObject = localStream;
             } catch (err) {
                 console.error("Error accessing media devices:", err);
             }
@@ -141,30 +156,29 @@
         });
 
         socket.on("callEnded", () => {
-            if (peerConnection) {
-                peerConnection.close();
-            }
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-            }
-            const audioElements = document.getElementsByTagName("audio");
-            while (audioElements.length > 0) {
-                audioElements[0].remove();
-            }
+            cleanupCall();
         });
 
         function endCall() {
             socket.emit("endCall", { receiver: document.getElementById("callTo").value });
+            cleanupCall();
+        }
+
+        function cleanupCall() {
             if (peerConnection) {
                 peerConnection.close();
+                peerConnection = null;
             }
+
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
             }
-            const audioElements = document.getElementsByTagName("audio");
-            while (audioElements.length > 0) {
-                audioElements[0].remove();
-            }
+
+            const videoElements = document.querySelectorAll("video");
+            videoElements.forEach(video => {
+                video.srcObject = null;
+            });
         }
     </script>
 </body>
