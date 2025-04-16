@@ -2,185 +2,232 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebRTC Video Call</title>
-    <style>
-        video {
-            width: 300px;
-            height: 225px;
-            margin: 10px;
-            background: #000;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WebRTC Video Call with Screen Sharing and Audio</title>
+  <style>
+    video {
+      width: 300px;
+      height: 225px;
+      margin: 10px;
+      background: #000;
+    }
+    #controls {
+      margin-top: 10px;
+    }
+  </style>
 </head>
 
 <body>
-    <h2>WebRTC Video Call</h2>
-    <input type="text" id="username" placeholder="Enter your username" />
-    <button onclick="join()">Join</button>
-    <br><br>
-    <input type="text" id="callTo" placeholder="Call username" />
-    <button onclick="callUser()">Call</button>
-    <br><br>
+  <h2>WebRTC Video Call with Screen Sharing</h2>
+  <input type="text" id="username" placeholder="Enter your username" />
+  <button onclick="join()">Join</button>
+  <br /><br />
+  <input type="text" id="callTo" placeholder="Call username" />
+  <button onclick="callUser()">Call</button>
+  <br /><br />
+  <div id="controls">
+    <button onclick="shareScreen()">Share Screen</button>
     <button onclick="endCall()">End Call</button>
-    <br><br>
-    <div id="videoContainer">
-        <video id="localVideo" autoplay muted playsinline></video>
-        <video id="remoteVideo" autoplay playsinline></video>
-    </div>
+  </div>
+  <br />
+  <div id="videoContainer">
+    <video id="localVideo" autoplay muted playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
-    <script>
-        const socket = io("http://localhost:4000", {
-            auth: {
-                token: "jwt_token"
-            }
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
+  <script>
+    const socket = io("http://localhost:4000", {
+      auth: {
+        token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZ21haWwuY29tIiwic3ViIjoiY205amRuOXphMDAwMHh3Zmc3ZXdvNGU1aCIsImlhdCI6MTc0NDc3NDQ4OCwiZXhwIjoxNzQ0ODYwODg4fQ.cD2MuNvsyU3qptKZ68gr6QOrE_WScYCHYXcF5uwrxs0" // Replace with actual token
+      }
+    });
+
+    let localStream, peerConnection;
+    const config = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' }
+      ]
+    };
+    let iceCandidatesQueue = [];
+
+    function join() {
+      const username = document.getElementById("username").value;
+      socket.emit("join", { username });
+    }
+
+    async function setupPeerConnection(remoteUsername) {
+      peerConnection = new RTCPeerConnection(config);
+
+      peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+          socket.emit("iceCandidate", {
+            receiver: remoteUsername,
+            candidate: event.candidate
+          });
+        }
+      };
+
+      peerConnection.ontrack = event => {
+        const remoteVideo = document.getElementById("remoteVideo");
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        localStream.getTracks().forEach(track =>
+          peerConnection.addTrack(track, localStream)
+        );
+
+        document.getElementById("localVideo").srcObject = localStream;
+      } catch (err) {
+        console.error("Error accessing media devices:", err);
+      }
+
+      return peerConnection;
+    }
+
+    async function callUser() {
+      try {
+        const callTo = document.getElementById("callTo").value;
+        await setupPeerConnection(callTo);
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+
+        socket.emit("call", {
+          caller: document.getElementById("username").value,
+          receiver: callTo,
+          offer
+        });
+      } catch (err) {
+        console.error("Error making call:", err);
+      }
+    }
+
+    socket.on("incomingCall", async ({ caller, offer }) => {
+      try {
+        await setupPeerConnection(caller);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+        while (iceCandidatesQueue.length) {
+          const candidate = iceCandidatesQueue.shift();
+          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+
+        socket.emit("answer", {
+          caller,
+          receiver: document.getElementById("username").value,
+          answer
+        });
+      } catch (err) {
+        console.error("Error handling incoming call:", err);
+      }
+    });
+
+    socket.on("callAccepted", async ({ answer }) => {
+      try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+
+        while (iceCandidatesQueue.length) {
+          const candidate = iceCandidatesQueue.shift();
+          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      } catch (err) {
+        console.error("Error handling accepted call:", err);
+      }
+    });
+
+    socket.on("iceCandidate", async ({ candidate }) => {
+      try {
+        if (peerConnection && peerConnection.remoteDescription) {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } else {
+          iceCandidatesQueue.push(candidate);
+        }
+      } catch (err) {
+        console.error("Error adding ICE candidate:", err);
+      }
+    });
+
+    socket.on("callEnded", () => {
+      cleanupCall();
+    });
+
+    function endCall() {
+      socket.emit("endCall", { receiver: document.getElementById("callTo").value });
+      cleanupCall();
+    }
+
+    function cleanupCall() {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+
+      document.querySelectorAll("video").forEach(video => {
+        video.srcObject = null;
+      });
+    }
+
+    async function shareScreen() {
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true // 🔊 Request screen audio too
         });
 
-        let localStream, peerConnection;
-        const config = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' },
-            ]
+        const screenTrack = screenStream.getVideoTracks()[0];
+        const audioTrack = screenStream.getAudioTracks()[0];
+
+        // Replace video track
+        const videoSender = peerConnection.getSenders().find(s => s.track?.kind === "video");
+        if (videoSender && screenTrack) {
+          videoSender.replaceTrack(screenTrack);
+        }
+
+        // Replace audio track (if screen audio available)
+        if (audioTrack) {
+          const audioSender = peerConnection.getSenders().find(s => s.track?.kind === "audio");
+          if (audioSender) {
+            audioSender.replaceTrack(audioTrack);
+          }
+        }
+
+        document.getElementById("localVideo").srcObject = screenStream;
+
+        screenTrack.onended = async () => {
+          if (!localStream) return;
+
+          const camVideo = localStream.getVideoTracks()[0];
+          const camAudio = localStream.getAudioTracks()[0];
+
+          const videoSender = peerConnection.getSenders().find(s => s.track?.kind === "video");
+          const audioSender = peerConnection.getSenders().find(s => s.track?.kind === "audio");
+
+          if (videoSender && camVideo) videoSender.replaceTrack(camVideo);
+          if (audioSender && camAudio) audioSender.replaceTrack(camAudio);
+
+          document.getElementById("localVideo").srcObject = localStream;
         };
-        let iceCandidatesQueue = [];
-
-        function join() {
-            const username = document.getElementById("username").value;
-            socket.emit("join", { username });
-        }
-
-        async function setupPeerConnection(remoteUsername) {
-            peerConnection = new RTCPeerConnection(config);
-
-            peerConnection.onicecandidate = event => {
-                if (event.candidate) {
-                    socket.emit("iceCandidate", {
-                        receiver: remoteUsername,
-                        candidate: event.candidate
-                    });
-                }
-            };
-
-            peerConnection.ontrack = event => {
-                const remoteVideo = document.getElementById("remoteVideo");
-                remoteVideo.srcObject = event.streams[0];
-            };
-
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-                localStream.getTracks().forEach(track =>
-                    peerConnection.addTrack(track, localStream)
-                );
-
-                const localVideo = document.getElementById("localVideo");
-                localVideo.srcObject = localStream;
-            } catch (err) {
-                console.error("Error accessing media devices:", err);
-            }
-
-            return peerConnection;
-        }
-
-        async function callUser() {
-            try {
-                const callTo = document.getElementById("callTo").value;
-                await setupPeerConnection(callTo);
-
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
-
-                socket.emit("call", {
-                    caller: document.getElementById("username").value,
-                    receiver: callTo,
-                    offer
-                });
-            } catch (err) {
-                console.error("Error making call:", err);
-            }
-        }
-
-        socket.on("incomingCall", async ({ caller, offer }) => {
-            try {
-                await setupPeerConnection(caller);
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-
-                // Process any queued candidates
-                while (iceCandidatesQueue.length) {
-                    const candidate = iceCandidatesQueue.shift();
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                }
-
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-
-                socket.emit("answer", {
-                    caller,
-                    receiver: document.getElementById("username").value,
-                    answer
-                });
-            } catch (err) {
-                console.error("Error handling incoming call:", err);
-            }
-        });
-
-        socket.on("callAccepted", async ({ answer }) => {
-            try {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-
-                // Process any queued candidates
-                while (iceCandidatesQueue.length) {
-                    const candidate = iceCandidatesQueue.shift();
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                }
-            } catch (err) {
-                console.error("Error handling accepted call:", err);
-            }
-        });
-
-        socket.on("iceCandidate", async ({ candidate }) => {
-            try {
-                if (peerConnection && peerConnection.remoteDescription) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                } else {
-                    iceCandidatesQueue.push(candidate);
-                }
-            } catch (err) {
-                console.error("Error adding ICE candidate:", err);
-            }
-        });
-
-        socket.on("callEnded", () => {
-            cleanupCall();
-        });
-
-        function endCall() {
-            socket.emit("endCall", { receiver: document.getElementById("callTo").value });
-            cleanupCall();
-        }
-
-        function cleanupCall() {
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-                localStream = null;
-            }
-
-            const videoElements = document.querySelectorAll("video");
-            videoElements.forEach(video => {
-                video.srcObject = null;
-            });
-        }
-    </script>
+      } catch (err) {
+        console.error("Error sharing screen:", err);
+      }
+    }
+  </script>
 </body>
 
 </html>
