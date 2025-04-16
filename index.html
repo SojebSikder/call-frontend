@@ -2,232 +2,281 @@
 <html lang="en">
 
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>WebRTC Video Call with Screen Sharing and Audio</title>
-  <style>
-    video {
-      width: 300px;
-      height: 225px;
-      margin: 10px;
-      background: #000;
-    }
-    #controls {
-      margin-top: 10px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Audio + Video Call with Screen Sharing and Recording</title>
 </head>
 
 <body>
-  <h2>WebRTC Video Call with Screen Sharing</h2>
-  <input type="text" id="username" placeholder="Enter your username" />
-  <button onclick="join()">Join</button>
-  <br /><br />
-  <input type="text" id="callTo" placeholder="Call username" />
-  <button onclick="callUser()">Call</button>
-  <br /><br />
-  <div id="controls">
-    <button onclick="shareScreen()">Share Screen</button>
+    <h2>WebRTC Audio + Video Call with Screen Sharing and Recording</h2>
+
+    <!-- User input for username and calling -->
+    <input type="text" id="username" placeholder="Enter your username" />
+    <button onclick="join()">Join</button>
+    <br><br>
+
+    <input type="text" id="callTo" placeholder="Call username" />
+    <button onclick="callUser()">Call</button>
+    <br><br>
+
     <button onclick="endCall()">End Call</button>
-  </div>
-  <br />
-  <div id="videoContainer">
-    <video id="localVideo" autoplay muted playsinline></video>
-    <video id="remoteVideo" autoplay playsinline></video>
-  </div>
+    <br><br>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
-  <script>
-    const socket = io("http://localhost:4000", {
-      auth: {
-        token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZ21haWwuY29tIiwic3ViIjoiY205amRuOXphMDAwMHh3Zmc3ZXdvNGU1aCIsImlhdCI6MTc0NDc3NDQ4OCwiZXhwIjoxNzQ0ODYwODg4fQ.cD2MuNvsyU3qptKZ68gr6QOrE_WScYCHYXcF5uwrxs0" // Replace with actual token
-      }
-    });
+    <button onclick="startRecording()">Start Recording</button>
+    <button onclick="stopRecording()">Stop Recording</button>
+    <button onclick="startScreenSharing()">Start Screen Sharing</button>
+    <button onclick="stopScreenSharing()">Stop Screen Sharing</button>
 
-    let localStream, peerConnection;
-    const config = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' }
-      ]
-    };
-    let iceCandidatesQueue = [];
+    <br><br>
 
-    function join() {
-      const username = document.getElementById("username").value;
-      socket.emit("join", { username });
-    }
+    <!-- Recording Indicator -->
+    <div id="recordingIndicator" style="display: none; color: red; font-weight: bold;">
+        🔴 Recording...
+    </div>
 
-    async function setupPeerConnection(remoteUsername) {
-      peerConnection = new RTCPeerConnection(config);
+    <h3>Local Video</h3>
+    <video id="localVideo" autoplay muted></video>
+    <h3>Remote Video</h3>
+    <video id="remoteVideo" autoplay></video>
 
-      peerConnection.onicecandidate = event => {
-        if (event.candidate) {
-          socket.emit("iceCandidate", {
-            receiver: remoteUsername,
-            candidate: event.candidate
-          });
-        }
-      };
+    <h3>Screen Sharing</h3>
+    <video id="screenVideo" autoplay></video>
 
-      peerConnection.ontrack = event => {
-        const remoteVideo = document.getElementById("remoteVideo");
-        remoteVideo.srcObject = event.streams[0];
-      };
-
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-        localStream.getTracks().forEach(track =>
-          peerConnection.addTrack(track, localStream)
-        );
-
-        document.getElementById("localVideo").srcObject = localStream;
-      } catch (err) {
-        console.error("Error accessing media devices:", err);
-      }
-
-      return peerConnection;
-    }
-
-    async function callUser() {
-      try {
-        const callTo = document.getElementById("callTo").value;
-        await setupPeerConnection(callTo);
-
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-
-        socket.emit("call", {
-          caller: document.getElementById("username").value,
-          receiver: callTo,
-          offer
-        });
-      } catch (err) {
-        console.error("Error making call:", err);
-      }
-    }
-
-    socket.on("incomingCall", async ({ caller, offer }) => {
-      try {
-        await setupPeerConnection(caller);
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-
-        while (iceCandidatesQueue.length) {
-          const candidate = iceCandidatesQueue.shift();
-          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-
-        socket.emit("answer", {
-          caller,
-          receiver: document.getElementById("username").value,
-          answer
-        });
-      } catch (err) {
-        console.error("Error handling incoming call:", err);
-      }
-    });
-
-    socket.on("callAccepted", async ({ answer }) => {
-      try {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-
-        while (iceCandidatesQueue.length) {
-          const candidate = iceCandidatesQueue.shift();
-          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-      } catch (err) {
-        console.error("Error handling accepted call:", err);
-      }
-    });
-
-    socket.on("iceCandidate", async ({ candidate }) => {
-      try {
-        if (peerConnection && peerConnection.remoteDescription) {
-          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        } else {
-          iceCandidatesQueue.push(candidate);
-        }
-      } catch (err) {
-        console.error("Error adding ICE candidate:", err);
-      }
-    });
-
-    socket.on("callEnded", () => {
-      cleanupCall();
-    });
-
-    function endCall() {
-      socket.emit("endCall", { receiver: document.getElementById("callTo").value });
-      cleanupCall();
-    }
-
-    function cleanupCall() {
-      if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-      }
-
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-        localStream = null;
-      }
-
-      document.querySelectorAll("video").forEach(video => {
-        video.srcObject = null;
-      });
-    }
-
-    async function shareScreen() {
-      try {
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true // 🔊 Request screen audio too
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
+    <script>
+        const socket = io("http://localhost:4000", {
+            auth: {
+                token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZ21haWwuY29tIiwic3ViIjoiY205amRuOXphMDAwMHh3Zmc3ZXdvNGU1aCIsImlhdCI6MTc0NDc3NDQ4OCwiZXhwIjoxNzQ0ODYwODg4fQ.cD2MuNvsyU3qptKZ68gr6QOrE_WScYCHYXcF5uwrxs0"
+            }
         });
 
-        const screenTrack = screenStream.getVideoTracks()[0];
-        const audioTrack = screenStream.getAudioTracks()[0];
+        let localStream, peerConnection, mediaRecorder, screenStream;
+        let recordedChunks = [];
 
-        // Replace video track
-        const videoSender = peerConnection.getSenders().find(s => s.track?.kind === "video");
-        if (videoSender && screenTrack) {
-          videoSender.replaceTrack(screenTrack);
-        }
-
-        // Replace audio track (if screen audio available)
-        if (audioTrack) {
-          const audioSender = peerConnection.getSenders().find(s => s.track?.kind === "audio");
-          if (audioSender) {
-            audioSender.replaceTrack(audioTrack);
-          }
-        }
-
-        document.getElementById("localVideo").srcObject = screenStream;
-
-        screenTrack.onended = async () => {
-          if (!localStream) return;
-
-          const camVideo = localStream.getVideoTracks()[0];
-          const camAudio = localStream.getAudioTracks()[0];
-
-          const videoSender = peerConnection.getSenders().find(s => s.track?.kind === "video");
-          const audioSender = peerConnection.getSenders().find(s => s.track?.kind === "audio");
-
-          if (videoSender && camVideo) videoSender.replaceTrack(camVideo);
-          if (audioSender && camAudio) audioSender.replaceTrack(camAudio);
-
-          document.getElementById("localVideo").srcObject = localStream;
+        const config = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+            ]
         };
-      } catch (err) {
-        console.error("Error sharing screen:", err);
-      }
-    }
-  </script>
+
+        let iceCandidatesQueue = [];
+
+        function join() {
+            const username = document.getElementById("username").value;
+            socket.emit("join", { username });
+        }
+
+        async function setupPeerConnection(remoteUsername) {
+            peerConnection = new RTCPeerConnection(config);
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit("iceCandidate", {
+                        receiver: remoteUsername,
+                        candidate: event.candidate
+                    });
+                }
+            };
+
+            peerConnection.ontrack = event => {
+                const remoteVideo = document.getElementById("remoteVideo");
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const localVideo = document.getElementById("localVideo");
+                localVideo.srcObject = localStream;
+                localStream.getTracks().forEach(track =>
+                    peerConnection.addTrack(track, localStream)
+                );
+            } catch (err) {
+                console.error("Error accessing media devices:", err);
+            }
+
+            return peerConnection;
+        }
+
+        async function callUser() {
+            try {
+                const callTo = document.getElementById("callTo").value;
+                await setupPeerConnection(callTo);
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                socket.emit("call", {
+                    caller: document.getElementById("username").value,
+                    receiver: callTo,
+                    offer
+                });
+            } catch (err) {
+                console.error("Error making call:", err);
+            }
+        }
+
+        socket.on("incomingCall", async ({ caller, offer }) => {
+            try {
+                await setupPeerConnection(caller);
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+                while (iceCandidatesQueue.length) {
+                    const candidate = iceCandidatesQueue.shift();
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                socket.emit("answer", {
+                    caller,
+                    receiver: document.getElementById("username").value,
+                    answer
+                });
+            } catch (err) {
+                console.error("Error handling incoming call:", err);
+            }
+        });
+
+        socket.on("callAccepted", async ({ answer }) => {
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+
+                while (iceCandidatesQueue.length) {
+                    const candidate = iceCandidatesQueue.shift();
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            } catch (err) {
+                console.error("Error handling accepted call:", err);
+            }
+        });
+
+        socket.on("iceCandidate", async ({ candidate }) => {
+            try {
+                if (peerConnection && peerConnection.remoteDescription) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                } else {
+                    iceCandidatesQueue.push(candidate);
+                }
+            } catch (err) {
+                console.error("Error adding ICE candidate:", err);
+            }
+        });
+
+        socket.on("callEnded", () => {
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            if (screenStream) {
+                screenStream.getTracks().forEach(track => track.stop());
+            }
+            const audioElements = document.getElementsByTagName("audio");
+            while (audioElements.length > 0) {
+                audioElements[0].remove();
+            }
+        });
+
+        function endCall() {
+            socket.emit("endCall", { receiver: document.getElementById("callTo").value });
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            if (screenStream) {
+                screenStream.getTracks().forEach(track => track.stop());
+            }
+            const audioElements = document.getElementsByTagName("audio");
+            while (audioElements.length > 0) {
+                audioElements[0].remove();
+            }
+        }
+
+        // Recording Logic
+        function startRecording() {
+            const localStream = document.getElementById("localVideo").srcObject;
+            const remoteStream = document.getElementById("remoteVideo").srcObject;
+
+            if (!localStream && !remoteStream) {
+                alert("No streams to record.");
+                return;
+            }
+
+            const combinedStream = new MediaStream();
+
+            if (localStream) {
+                localStream.getTracks().forEach(track => combinedStream.addTrack(track));
+            }
+
+            if (remoteStream) {
+                remoteStream.getTracks().forEach(track => combinedStream.addTrack(track));
+            }
+
+            recordedChunks = [];
+            mediaRecorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm; codecs=vp9,opus' });
+
+            mediaRecorder.ondataavailable = event => {
+                if (event.data.size > 0) recordedChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `recording_${new Date().toISOString()}.webm`;
+                a.click();
+                URL.revokeObjectURL(url);
+
+                // Hide the indicator when recording stops
+                document.getElementById("recordingIndicator").style.display = "none";
+            };
+
+            mediaRecorder.start();
+            document.getElementById("recordingIndicator").style.display = "inline";
+            console.log("Recording started");
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+                console.log("Recording stopped");
+            }
+        }
+
+        // Screen Sharing Logic
+        async function startScreenSharing() {
+            try {
+                screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
+                const screenVideo = document.getElementById("screenVideo");
+                screenVideo.srcObject = screenStream;
+
+                // Add screen stream to the peer connection
+                if (peerConnection) {
+                    screenStream.getTracks().forEach(track => peerConnection.addTrack(track, screenStream));
+                }
+
+            } catch (err) {
+                console.error("Error sharing screen:", err);
+            }
+        }
+
+        function stopScreenSharing() {
+            if (screenStream) {
+                screenStream.getTracks().forEach(track => track.stop());
+                document.getElementById("screenVideo").srcObject = null;
+            }
+        }
+    </script>
 </body>
 
 </html>
