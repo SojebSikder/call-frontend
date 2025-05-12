@@ -42,11 +42,14 @@
     <h3>Screen Sharing</h3>
     <video id="screenVideo" autoplay></video>
 
+    <!-- Canvas for combined video recording (hidden) -->
+    <canvas id="recordingCanvas" width="1280" height="720" style="display: none;"></canvas>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
     <script>
-        const socket = io("http://localhost:4000", {
+        const socket = io("http://192.168.4.2:4000", {
             auth: {
-                token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZ21haWwuY29tIiwic3ViIjoiY205amRuOXphMDAwMHh3Zmc3ZXdvNGU1aCIsImlhdCI6MTc0NDc3NDQ4OCwiZXhwIjoxNzQ0ODYwODg4fQ.cD2MuNvsyU3qptKZ68gr6QOrE_WScYCHYXcF5uwrxs0"
+                token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RkZW1vQGdtYWlsLmNvbSIsInN1YiI6ImNtYWttOXM4czAwMDB4d21rODQ5ZWw0ODciLCJpYXQiOjE3NDcwMjYxODIsImV4cCI6MTc0NzExMjU4Mn0.cwdDucwC0W6ZRQWHHUZ-BJbWyD3kJHrKSDgnIMKID-k"
             }
         });
 
@@ -200,31 +203,88 @@
             }
         }
 
-        // Recording Logic
+        let recordingId = crypto.randomUUID(); // Unique ID for this recording session
+        let chunkSequence = 0;
+
+        function splitArrayBuffer(arrayBuffer, chunkSize) {
+            const chunks = [];
+            for (let i = 0; i < arrayBuffer.byteLength; i += chunkSize) {
+                chunks.push(arrayBuffer.slice(i, i + chunkSize));
+            }
+            return chunks;
+        }
+
         function startRecording() {
-            const localStream = document.getElementById("localVideo").srcObject;
-            const remoteStream = document.getElementById("remoteVideo").srcObject;
+            const localVideo = document.getElementById("localVideo");
+            const remoteVideo = document.getElementById("remoteVideo");
+            const canvas = document.getElementById("recordingCanvas");
+            const ctx = canvas.getContext("2d");
 
-            if (!localStream && !remoteStream) {
-                alert("No streams to record.");
-                return;
-            }
-
-            const combinedStream = new MediaStream();
-
-            if (localStream) {
-                localStream.getTracks().forEach(track => combinedStream.addTrack(track));
-            }
-
-            if (remoteStream) {
-                remoteStream.getTracks().forEach(track => combinedStream.addTrack(track));
-            }
-
+            const fps = 30;
             recordedChunks = [];
-            mediaRecorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm; codecs=vp9,opus' });
+            chunkSequence = 0;
+            recordingId = crypto.randomUUID();
 
-            mediaRecorder.ondataavailable = event => {
-                if (event.data.size > 0) recordedChunks.push(event.data);
+            function drawFrame() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                const halfWidth = canvas.width / 2;
+                const height = canvas.height;
+
+                if (remoteVideo.readyState >= 2) {
+                    ctx.drawImage(remoteVideo, 0, 0, halfWidth, height);
+                }
+
+                if (localVideo.readyState >= 2) {
+                    ctx.drawImage(localVideo, halfWidth, 0, halfWidth, height);
+                }
+
+                if (mediaRecorder && mediaRecorder.state === "recording") {
+                    setTimeout(drawFrame, 1000 / fps);
+                }
+            }
+
+            const canvasStream = canvas.captureStream(fps);
+
+            // Create an audio context to merge local and remote audio
+            const audioContext = new AudioContext();
+            const destination = audioContext.createMediaStreamDestination();
+
+            // Add local audio
+            if (localStream) {
+                const localAudioSource = audioContext.createMediaStreamSource(localStream);
+                localAudioSource.connect(destination);
+            }
+
+            // Add remote audio
+            const remoteStream = remoteVideo.srcObject;
+            if (remoteStream) {
+                const remoteAudioSource = audioContext.createMediaStreamSource(remoteStream);
+                remoteAudioSource.connect(destination);
+            }
+
+            // Combine video (canvas) + audio into one stream
+            const combinedStream = new MediaStream([
+                ...canvasStream.getVideoTracks(),
+                ...destination.stream.getAudioTracks()
+            ]);
+
+            mediaRecorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm; codecs=vp9' });
+
+            mediaRecorder.ondataavailable = async event => {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                    const arrayBuffer = await event.data.arrayBuffer();
+
+                    const chunks = splitArrayBuffer(arrayBuffer, 1 * 1024);
+                    for (const chunk of chunks) {
+                        socket.emit('recordingChunk', {
+                            recordingId,
+                            sequence: chunkSequence++,
+                            chunk: Array.from(new Uint8Array(chunk)),
+                        });
+                    }
+                }
             };
 
             mediaRecorder.onstop = () => {
@@ -235,19 +295,20 @@
                 a.download = `recording_${new Date().toISOString()}.webm`;
                 a.click();
                 URL.revokeObjectURL(url);
-
-                // Hide the indicator when recording stops
                 document.getElementById("recordingIndicator").style.display = "none";
             };
 
-            mediaRecorder.start();
+            mediaRecorder.start(1000); // fire every second
+            drawFrame();
             document.getElementById("recordingIndicator").style.display = "inline";
             console.log("Recording started");
         }
 
+
         function stopRecording() {
             if (mediaRecorder && mediaRecorder.state !== "inactive") {
                 mediaRecorder.stop();
+                socket.emit('recordingEnded', { recordingId });
                 console.log("Recording stopped");
             }
         }
